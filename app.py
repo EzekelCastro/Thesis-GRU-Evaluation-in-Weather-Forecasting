@@ -385,7 +385,7 @@ else:
     col1, col2, col3 = st.columns(3)
     col1.metric("Stations",  "2", "Baguio City & Manila")
     col2.metric("Models",    "5", "GRU · LSTM · RNN · LR · ARIMA")
-    col3.metric("Variables", "4", "Rain · Temp · Wind · Pressure")
+    col3.metric("Variables", "4", "Precipitation · Temp · Wind · Pressure")
 
     st.info(
         "Configure the settings in the sidebar, then click **Run Analysis** to start.\n\n"

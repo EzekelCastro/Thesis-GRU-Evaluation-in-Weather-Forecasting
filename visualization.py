@@ -36,7 +36,7 @@ MODEL_COLORS = {
 }
 
 VARIABLE_LABELS = {
-    "prcp": "Rainfall (mm)",
+    "prcp": "Precipitation (mm)",
     "temp": "Avg Temp (°C)",
     "wspd": "Wind Speed (km/h)",
     "pres": "Pressure (hPa)",
