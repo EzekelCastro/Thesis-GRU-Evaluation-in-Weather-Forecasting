@@ -316,19 +316,34 @@ if st.session_state.results:
         st.caption(
             "Accuracy = 100 - MAPE (higher is better).  "
             "MSE / MAE in original physical units.  "
-            "R2 closer to 1.0 is better."
+            "R² closer to 1.0 is better."
         )
+
+        metric_choice = st.radio(
+            "Metric to chart:",
+            ["Accuracy (%)", "R2", "MSE", "MAE"],
+            horizontal=True,
+            index=0,
+        )
+
+        _short = {
+            "GRU":              "GRU",
+            "LSTM":             "LSTM",
+            "SimpleRNN":        "RNN",
+            "LinearRegression": "LR",
+            "ARIMA":            "ARIMA",
+        }
 
         for station_name, res in results.items():
             st.markdown(f"### {station_name}")
-            metric_cols = st.columns(len(all_columns))
 
+            # ── Metric tables ──────────────────────────────────────────────────
+            metric_cols = st.columns(len(all_columns))
             for col_idx, col in enumerate(all_columns):
                 with metric_cols[col_idx]:
                     st.markdown(f"**{VARIABLE_LABELS.get(col, col)}**")
                     df_m = _metrics_dataframe(res["metrics"], model_names, col)
 
-                    # Highlight best R2 row green, worst red
                     def _style(df):
                         best  = df["R2"].idxmax()
                         worst = df["R2"].idxmin()
@@ -340,10 +355,47 @@ if st.session_state.results:
                     styled = df_m.style.apply(_style, axis=None).format(precision=4)
                     st.dataframe(styled, use_container_width=True)
 
+            # ── Bar charts ─────────────────────────────────────────────────────
+            st.markdown(f"**{metric_choice} by Model — {station_name}**")
+            chart_cols = st.columns(len(all_columns))
+            for col_idx, col in enumerate(all_columns):
+                with chart_cols[col_idx]:
+                    labels = [_short.get(mn, mn) for mn in model_names]
+                    values = [
+                        res["metrics"][mn][col].get(metric_choice, float("nan"))
+                        for mn in model_names
+                    ]
+                    bar_colors = [MODEL_COLORS.get(mn, "#cccccc") for mn in model_names]
+
+                    fig, ax = plt.subplots(figsize=(4, 3.2))
+                    bars = ax.bar(labels, values, color=bar_colors,
+                                  edgecolor="white", linewidth=0.6)
+
+                    for bar, val in zip(bars, values):
+                        if not np.isnan(val):
+                            ax.text(
+                                bar.get_x() + bar.get_width() / 2,
+                                bar.get_height(),
+                                f"{val:.3f}",
+                                ha="center", va="bottom", fontsize=6.5,
+                            )
+
+                    ax.set_title(VARIABLE_LABELS.get(col, col),
+                                 fontsize=9, fontweight="bold")
+                    ax.set_xlabel("Model", fontsize=8)
+                    ax.set_ylabel(metric_choice, fontsize=8)
+                    ax.tick_params(axis="x", labelsize=7.5)
+                    ax.tick_params(axis="y", labelsize=7)
+                    ax.grid(axis="y", alpha=0.25, linestyle=":")
+                    ax.spines[["top", "right"]].set_visible(False)
+                    plt.tight_layout()
+                    st.pyplot(fig, use_container_width=True)
+                    plt.close(fig)
+
             st.divider()
 
         # Summary: best model per variable
-        st.subheader("Best Model per Variable (by R2)")
+        st.subheader("Best Model per Variable (by R²)")
         summary_rows = []
         for station_name, res in results.items():
             for col in all_columns:
@@ -354,10 +406,10 @@ if st.session_state.results:
                 best_r2  = res["metrics"][best_model][col]["R2"]
                 best_acc = res["metrics"][best_model][col]["Accuracy (%)"]
                 summary_rows.append({
-                    "Station":    station_name,
-                    "Variable":   VARIABLE_LABELS.get(col, col),
-                    "Best Model": best_model,
-                    "R2":         round(best_r2, 4),
+                    "Station":      station_name,
+                    "Variable":     VARIABLE_LABELS.get(col, col),
+                    "Best Model":   best_model,
+                    "R²":           round(best_r2, 4),
                     "Accuracy (%)": round(best_acc, 2) if not np.isnan(best_acc) else float("nan"),
                 })
         st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
