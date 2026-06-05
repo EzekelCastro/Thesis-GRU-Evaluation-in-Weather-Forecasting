@@ -3,7 +3,7 @@ preprocessing.py
 Full data-cleaning pipeline:
   1. Missing-value imputation  (forward-fill → backward-fill → linear interpolation)
   2. Outlier removal           (IQR-based; skipped for prcp and zero-IQR columns)
-  3. Feature scaling           (MinMax per column, scalers kept for inverse-transform)
+  3. Feature scaling           (MinMax per column; log1p applied first for prcp)
   4. Train / test split        (80 / 20, temporal order preserved)
   5. Sliding-window sequences  (for RNN/LSTM/GRU)
 """
@@ -18,6 +18,31 @@ TARGET_COLUMNS = ["prcp", "temp", "wspd", "pres"]
 # 200 mm). IQR fencing would cap those real extremes at ~12–15 mm, causing
 # models to systematically under-predict rainfall.  Skip IQR for prcp only.
 _SKIP_IQR = {"prcp"}
+
+# Columns that need a log1p transform before MinMaxScaling.
+# Without it, 10 mm rain maps to ~0.03 in scaled space (models learn "prcp ≈ 0").
+# log1p: 0→0, 10→0.42, 50→0.68, 200→0.92  — distribution becomes learnable.
+_LOG_TRANSFORM = {"prcp"}
+
+
+class LogMinMaxScaler:
+    """
+    Drop-in replacement for MinMaxScaler that applies log1p before fitting
+    and expm1 after inverse-transforming.  Identical interface so all existing
+    scalers[col].inverse_transform(...) calls work without modification.
+    """
+
+    def __init__(self):
+        self._sc = MinMaxScaler()
+
+    def fit_transform(self, X: np.ndarray) -> np.ndarray:
+        return self._sc.fit_transform(np.log1p(np.clip(X, 0, None)))
+
+    def transform(self, X: np.ndarray) -> np.ndarray:
+        return self._sc.transform(np.log1p(np.clip(X, 0, None)))
+
+    def inverse_transform(self, X: np.ndarray) -> np.ndarray:
+        return np.expm1(self._sc.inverse_transform(X))
 
 
 # ── 1. Missing values ──────────────────────────────────────────────────────────
@@ -64,17 +89,18 @@ def scale_data(
     df: pd.DataFrame, columns: list | None = None
 ) -> tuple[pd.DataFrame, dict]:
     """
-    Fit one MinMaxScaler per column and transform in-place.
+    Fit one scaler per column and transform in-place.
+    Columns in _LOG_TRANSFORM (prcp) use LogMinMaxScaler; others use MinMaxScaler.
     Returns (scaled_df, {col: scaler}) so callers can invert later.
     """
     if columns is None:
         columns = TARGET_COLUMNS
     df_scaled = df.copy()
-    scalers: dict[str, MinMaxScaler] = {}
+    scalers: dict = {}
     for col in columns:
         if col not in df.columns:
             continue
-        sc = MinMaxScaler()
+        sc = LogMinMaxScaler() if col in _LOG_TRANSFORM else MinMaxScaler()
         df_scaled[col] = sc.fit_transform(df[[col]])
         scalers[col] = sc
     return df_scaled, scalers

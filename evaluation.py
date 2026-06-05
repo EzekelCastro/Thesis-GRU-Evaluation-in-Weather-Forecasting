@@ -1,7 +1,7 @@
 """
 evaluation.py
 Computes four metrics per (model, variable) pair:
-  • Accuracy  — (1 - MAPE) × 100 %     (NaN-safe; zero actual values skipped)
+  • Accuracy  — (1 - MAPE) × 100 %     (NaN-safe; trace values skipped)
   • MSE       — Mean Squared Error
   • MAE       — Mean Absolute Error
   • R²        — Coefficient of determination
@@ -10,12 +10,19 @@ Computes four metrics per (model, variable) pair:
 import numpy as np
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 
+# Minimum absolute value of y_true included in MAPE.
+# Excludes trace precipitation (< 1 mm) and near-calm wind speeds that would
+# contribute 200–1000 % individual errors and collapse the accuracy score.
+# For temperature (15–35 °C) and pressure (990–1020 hPa) this threshold has
+# no effect — their values are always well above 1.0.
+_MAPE_MIN = 1.0
+
 
 # ── Individual metrics ─────────────────────────────────────────────────────────
 
 def _mape(y_true: np.ndarray, y_pred: np.ndarray) -> float:
-    """MAPE ignoring zero actual values to avoid division by zero."""
-    mask = y_true != 0.0
+    """MAPE on days where |y_true| >= _MAPE_MIN (avoids trace-value blow-up)."""
+    mask = np.abs(y_true) >= _MAPE_MIN
     if mask.sum() == 0:
         return float("nan")
     return float(np.mean(np.abs((y_true[mask] - y_pred[mask]) / y_true[mask])) * 100.0)
