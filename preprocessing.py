@@ -2,7 +2,7 @@
 preprocessing.py
 Full data-cleaning pipeline:
   1. Missing-value imputation  (forward-fill → backward-fill → linear interpolation)
-  2. Outlier removal           (IQR-based; skipped for zero-IQR columns like dry-season prcp)
+  2. Outlier removal           (IQR-based; skipped for prcp and zero-IQR columns)
   3. Feature scaling           (MinMax per column, scalers kept for inverse-transform)
   4. Train / test split        (80 / 20, temporal order preserved)
   5. Sliding-window sequences  (for RNN/LSTM/GRU)
@@ -13,6 +13,11 @@ import pandas as pd
 from sklearn.preprocessing import MinMaxScaler
 
 TARGET_COLUMNS = ["prcp", "temp", "wspd", "pres"]
+
+# Precipitation is zero-inflated and right-skewed (typhoon days can exceed
+# 200 mm). IQR fencing would cap those real extremes at ~12–15 mm, causing
+# models to systematically under-predict rainfall.  Skip IQR for prcp only.
+_SKIP_IQR = {"prcp"}
 
 
 # ── 1. Missing values ──────────────────────────────────────────────────────────
@@ -31,8 +36,8 @@ def handle_missing_values(df: pd.DataFrame) -> pd.DataFrame:
 def remove_outliers_iqr(df: pd.DataFrame, columns: list | None = None) -> pd.DataFrame:
     """
     Replace values outside [Q1 - 1.5·IQR, Q3 + 1.5·IQR] with NaN, then
-    re-impute.  Skips columns whose IQR is zero (e.g. consecutive zero-rain
-    periods) to avoid marking the whole column as outliers.
+    re-impute.  Skips columns in _SKIP_IQR (prcp) and any column whose IQR
+    is zero to avoid erasing legitimate data.
     """
     if columns is None:
         columns = TARGET_COLUMNS
@@ -40,10 +45,12 @@ def remove_outliers_iqr(df: pd.DataFrame, columns: list | None = None) -> pd.Dat
     for col in columns:
         if col not in df.columns:
             continue
+        if col in _SKIP_IQR:
+            continue
         q1 = df[col].quantile(0.25)
         q3 = df[col].quantile(0.75)
         iqr = q3 - q1
-        if iqr == 0:          # zero-spread column — skip to avoid blanking it
+        if iqr == 0:
             continue
         lower = q1 - 1.5 * iqr
         upper = q3 + 1.5 * iqr
