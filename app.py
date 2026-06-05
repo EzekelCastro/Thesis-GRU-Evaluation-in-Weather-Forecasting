@@ -6,7 +6,11 @@ Run with:
     streamlit run app.py
 """
 
+import hashlib
 import io
+import json
+import os
+import pickle
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -16,7 +20,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import streamlit as st
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 
 from data_fetch import fetch_all_data, TARGET_COLUMNS
 from preprocessing import preprocess_station
@@ -116,6 +120,183 @@ def _fig_to_bytes(fig: plt.Figure) -> bytes:
     return buf.read()
 
 
+# ── Cache helpers ──────────────────────────────────────────────────────────────
+
+_CACHE_DIR = "cache"
+
+
+def _make_cache_key(start_date, end_date, stations, models,
+                    epochs, hidden_size, seq_len, batch_size,
+                    patience, num_layers, dropout) -> str:
+    s = "|".join([
+        str(start_date), str(end_date),
+        ",".join(sorted(stations)),
+        ",".join(sorted(models)),
+        str(epochs), str(hidden_size), str(seq_len),
+        str(batch_size), str(patience), str(num_layers), str(dropout),
+    ])
+    return hashlib.sha1(s.encode()).hexdigest()[:16]
+
+
+def _pkl_path(key: str) -> str:
+    return os.path.join(_CACHE_DIR, f"results_{key}.pkl")
+
+
+def _meta_path(key: str) -> str:
+    return os.path.join(_CACHE_DIR, f"meta_{key}.json")
+
+
+def _save_cache(key: str, results: dict, meta: dict) -> None:
+    os.makedirs(_CACHE_DIR, exist_ok=True)
+    with open(_pkl_path(key), "wb") as f:
+        pickle.dump(results, f)
+    with open(_meta_path(key), "w") as f:
+        json.dump(meta, f)
+
+
+def _load_cache_meta(key: str) -> dict | None:
+    path = _meta_path(key)
+    if not os.path.exists(path):
+        return None
+    with open(path) as f:
+        return json.load(f)
+
+
+def _load_cache(key: str) -> dict | None:
+    path = _pkl_path(key)
+    if not os.path.exists(path):
+        return None
+    with open(path, "rb") as f:
+        return pickle.load(f)
+
+
+def _clear_all_cache() -> int:
+    if not os.path.exists(_CACHE_DIR):
+        return 0
+    removed = 0
+    for fname in os.listdir(_CACHE_DIR):
+        if fname.endswith((".pkl", ".json")):
+            os.remove(os.path.join(_CACHE_DIR, fname))
+            removed += 1
+    return removed
+
+
+def _models_pkl_path(key: str) -> str:
+    return os.path.join(_CACHE_DIR, f"models_{key}.pkl")
+
+
+def _save_models_cache(key: str, dl_states: dict) -> None:
+    os.makedirs(_CACHE_DIR, exist_ok=True)
+    with open(_models_pkl_path(key), "wb") as f:
+        pickle.dump(dl_states, f)
+
+
+def _load_models_cache(key: str) -> dict | None:
+    path = _models_pkl_path(key)
+    if not os.path.exists(path):
+        return None
+    with open(path, "rb") as f:
+        return pickle.load(f)
+
+
+def _generate_forecast(
+    forecast_data: dict,
+    station_name: str,
+    selected_models: list,
+    dl_states: dict | None,
+) -> tuple[dict, list]:
+    """
+    Rolling 7-day forecast from saved model data.
+
+    Returns
+    -------
+    forecasts      : {model_name: np.ndarray (7, n_cols)} — original scale
+    forecast_dates : list[datetime.date]
+    """
+    import torch
+
+    scalers     = forecast_data["scalers"]
+    columns     = forecast_data["columns"]
+    cfg         = forecast_data["model_config"]
+    seq_len     = cfg["seq_len"]
+    n_feat      = cfg["n_feat"]
+    n_out       = cfg["n_out"]
+    hidden_size = cfg["hidden_size"]
+    num_layers  = cfg["num_layers"]
+    dropout     = cfg["dropout"]
+    n_days      = 7
+
+    df_vals   = forecast_data["df_scaled_values"]   # (N, n_cols) float32
+    train_len = forecast_data["train_df_len"]
+    last_date = forecast_data["last_test_date"]
+
+    last_window = df_vals[-seq_len:].astype(np.float32)
+
+    forecast_dates = [
+        (pd.Timestamp(last_date) + timedelta(days=i + 1)).date()
+        for i in range(n_days)
+    ]
+
+    def _inv(arr: np.ndarray) -> np.ndarray:
+        out = np.empty_like(arr, dtype=np.float64)
+        for i, col in enumerate(columns):
+            out[:, i] = scalers[col].inverse_transform(arr[:, i : i + 1]).ravel()
+        return out
+
+    forecasts: dict = {}
+
+    # ── ARIMA ──
+    if "ARIMA" in selected_models and forecast_data.get("arima_models"):
+        test_vals   = df_vals[train_len:].astype(np.float32)
+        arima_preds = np.zeros((n_days, len(columns)), dtype=np.float32)
+        for i, col in enumerate(columns):
+            m = forecast_data["arima_models"][col]
+            try:
+                m.update(test_vals[:, i])
+            except Exception:
+                pass
+            fc = np.array(m.predict(n_periods=n_days), dtype=np.float32)
+            arima_preds[:, i] = np.clip(fc, 0.0, 1.0)
+        forecasts["ARIMA"] = _inv(arima_preds)
+
+    # ── Linear Regression ──
+    if "LinearRegression" in selected_models and forecast_data.get("lr_model") is not None:
+        lr = forecast_data["lr_model"]
+        window = last_window.copy()
+        rows = []
+        for _ in range(n_days):
+            x = window[-seq_len:].reshape(1, seq_len, len(columns))
+            p = predict_linear_regression(lr, x).astype(np.float32)
+            p = np.clip(p, 0.0, 1.0)
+            rows.append(p[0])
+            window = np.vstack([window, p])
+        forecasts["LinearRegression"] = _inv(np.array(rows))
+
+    # ── Deep Learning models ──
+    for model_name in ["GRU", "LSTM", "SimpleRNN"]:
+        if model_name not in selected_models:
+            continue
+        if not dl_states or model_name not in dl_states:
+            continue
+        model = build_model(model_name, n_feat, n_out, hidden_size, num_layers, dropout)
+        model.load_state_dict({k: v.to(DEVICE) for k, v in dl_states[model_name].items()})
+        model.eval()
+        window = last_window.copy()
+        rows = []
+        for _ in range(n_days):
+            x = torch.from_numpy(
+                window[-seq_len:].reshape(1, seq_len, n_feat)
+            ).to(DEVICE)
+            with torch.no_grad():
+                p = model(x).cpu().numpy().astype(np.float32)
+            p = np.clip(p, 0.0, 1.0)
+            rows.append(p[0])
+            window = np.vstack([window, p])
+        forecasts[model_name] = _inv(np.array(rows))
+
+    return forecasts, forecast_dates
+
+
 # ── Sidebar ────────────────────────────────────────────────────────────────────
 
 with st.sidebar:
@@ -156,8 +337,43 @@ with st.sidebar:
 
     st.divider()
 
-    run_btn   = st.button("Run Analysis", type="primary",    use_container_width=True)
-    clear_btn = st.button("Clear Results", type="secondary", use_container_width=True)
+    # Derive the cache key from current sidebar settings
+    _preview_stations = [k for k, v in {"Baguio": sel_baguio, "Manila": sel_manila}.items() if v]
+    _preview_models   = [k for k, v in sel_models.items() if v]
+    _cache_key = _make_cache_key(
+        start_date, end_date, _preview_stations, _preview_models,
+        epochs, hidden_size, seq_len, batch_size, patience, num_layers, dropout,
+    )
+    _cached_meta = _load_cache_meta(_cache_key)
+
+    if _cached_meta:
+        st.success(
+            f"Saved results found\n\n"
+            f"**{_cached_meta['saved_at']}**\n\n"
+            f"Stations: {', '.join(_cached_meta['stations'])}\n\n"
+            f"Models: {', '.join(_cached_meta['models'])}"
+        )
+        load_cache_btn = st.button(
+            "Load Saved Results", type="primary", use_container_width=True
+        )
+    else:
+        load_cache_btn = False
+
+    run_btn   = st.button(
+        "Run Analysis",
+        type="secondary" if _cached_meta else "primary",
+        use_container_width=True,
+    )
+    clear_btn = st.button("Clear Display", type="secondary", use_container_width=True)
+
+    st.divider()
+
+    with st.expander("Cache Management"):
+        cache_files = len(os.listdir(_CACHE_DIR)) // 2 if os.path.exists(_CACHE_DIR) else 0
+        st.caption(f"{cache_files} saved result(s) on disk.")
+        clear_cache_btn = st.button(
+            "Delete All Saved Results", type="secondary", use_container_width=True
+        )
 
     st.divider()
     st.caption(f"Device: `{DEVICE}`")
@@ -172,6 +388,21 @@ if "results" not in st.session_state:
 if clear_btn:
     st.session_state.results = None
     st.rerun()
+
+if clear_cache_btn:
+    n = _clear_all_cache()
+    st.session_state.results = None
+    st.toast(f"Deleted {n} cache file(s).", icon="🗑️")
+    st.rerun()
+
+if load_cache_btn:
+    cached = _load_cache(_cache_key)
+    if cached:
+        st.session_state.results = cached
+        st.toast("Results loaded from cache!", icon="💾")
+        st.rerun()
+    else:
+        st.error("Cache file not found. Please run a fresh analysis.")
 
 
 # ── Page header ────────────────────────────────────────────────────────────────
@@ -202,6 +433,7 @@ if run_btn:
         st.stop()
 
     station_results: dict = {}
+    all_dl_states:   dict = {}   # station_name → {model_name: state_dict}
     total_steps = len(active_stations) * len(active_models)
     step = 0
 
@@ -234,7 +466,10 @@ if run_btn:
             n_feat  = X_train.shape[2]
             n_out   = y_train.shape[1]
 
-            raw_preds: dict = {}
+            raw_preds:         dict = {}
+            _dl_states_station: dict = {}
+            _arima_m_station        = None
+            _lr_m_station           = None
 
             # ── Train each model ───────────────────────────────────────────────
             for model_name in active_models:
@@ -250,16 +485,21 @@ if run_btn:
                         epochs, batch_size, patience,
                     )
                     raw_preds[model_name] = predict_deep(m, X_test)
+                    _dl_states_station[model_name] = {
+                        k: v.cpu() for k, v in m.state_dict().items()
+                    }
 
                 elif model_name == "LinearRegression":
                     m = train_linear_regression(X_train, y_train)
                     raw_preds[model_name] = predict_linear_regression(m, X_test)
+                    _lr_m_station = m
 
                 elif model_name == "ARIMA":
                     arima_m = train_all_arima(proc["train_df"], columns)
                     raw_preds[model_name] = predict_arima(
                         arima_m, len(test_df), seq_len, columns
                     )
+                    _arima_m_station = arima_m
 
                 step += 1
                 progress_bar.progress(step / total_steps,
@@ -276,11 +516,48 @@ if run_btn:
                 "metrics":     metrics,
                 "columns":     columns,
                 "dates":       test_df.index[seq_len:],
+                "forecast_data": {
+                    "scalers":           scalers,
+                    "columns":           columns,
+                    "arima_models":      _arima_m_station,
+                    "lr_model":          _lr_m_station,
+                    "train_df_len":      len(proc["train_df"]),
+                    "df_scaled_values":  proc["df_scaled"][columns].values.astype(np.float32),
+                    "last_test_date":    test_df.index[-1],
+                    "model_config": {
+                        "n_feat":      n_feat,
+                        "n_out":       n_out,
+                        "hidden_size": hidden_size,
+                        "num_layers":  num_layers,
+                        "dropout":     dropout,
+                        "seq_len":     seq_len,
+                    },
+                },
             }
+
+            all_dl_states[station_name] = _dl_states_station
 
         progress_bar.progress(1.0, text="Complete!")
         run_status.update(label="Analysis complete!", state="complete", expanded=False)
 
+    # Save DL model weights for forecasting (separate, larger file)
+    if all_dl_states:
+        _save_models_cache(_cache_key, all_dl_states)
+
+    # Save results to cache so future visits skip retraining
+    _save_cache(
+        _cache_key,
+        station_results,
+        {
+            "saved_at":   datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "stations":   active_stations,
+            "models":     active_models,
+            "date_range": f"{start_date} → {end_date}",
+            "epochs":     epochs,
+            "seq_len":    seq_len,
+        },
+    )
+    st.toast("Results saved to cache.", icon="💾")
     st.session_state.results = station_results
 
 
@@ -291,7 +568,9 @@ if st.session_state.results:
     all_columns = next(iter(results.values()))["columns"]
     model_names = list(next(iter(results.values()))["predictions"].keys())
 
-    tab_pred, tab_metrics, tab_dl = st.tabs(["Predictions", "Metrics", "Download"])
+    tab_pred, tab_metrics, tab_fc, tab_dl = st.tabs(
+        ["Predictions", "Metrics", "Forecast", "Download"]
+    )
 
     # ── Tab 1: Prediction plots ────────────────────────────────────────────────
     with tab_pred:
@@ -414,7 +693,159 @@ if st.session_state.results:
                 })
         st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
 
-    # ── Tab 3: Download ────────────────────────────────────────────────────────
+    # ── Tab 3: Forecast ────────────────────────────────────────────────────────
+    with tab_fc:
+        st.subheader("7-Day Weather Forecast")
+        st.caption(
+            "Rolling day-by-day forecast generated from saved model data.  "
+            "Dates are the 7 days immediately after the last date in the dataset."
+        )
+
+        fc_station = st.radio(
+            "Station", list(results.keys()), horizontal=True, key="fc_station"
+        )
+        fc_res = results[fc_station]
+
+        if "forecast_data" not in fc_res:
+            st.warning(
+                "Forecast data not found in this cache entry.  "
+                "Re-run the analysis with the updated code to enable forecasting."
+            )
+        else:
+            forecast_data = fc_res["forecast_data"]
+            fc_columns    = fc_res["columns"]
+            dl_states_all = _load_models_cache(_cache_key)
+            station_dl    = dl_states_all.get(fc_station) if dl_states_all else None
+            has_dl        = station_dl is not None
+
+            st.divider()
+            col_m, col_v = st.columns(2)
+
+            with col_m:
+                st.markdown("**Select Models**")
+                fc_sel: dict = {}
+                for mn in ["GRU", "LSTM", "SimpleRNN"]:
+                    available = has_dl and mn in station_dl
+                    note      = "" if available else "  *(run locally to enable)*"
+                    fc_sel[mn] = st.checkbox(
+                        f"{mn}{note}",
+                        value=available,
+                        disabled=not available,
+                        key=f"fc_m_{mn}",
+                    )
+                lr_ok   = forecast_data.get("lr_model") is not None
+                arima_ok = forecast_data.get("arima_models") is not None
+                fc_sel["LinearRegression"] = st.checkbox(
+                    "Linear Regression",
+                    value=lr_ok, disabled=not lr_ok, key="fc_m_lr",
+                )
+                fc_sel["ARIMA"] = st.checkbox(
+                    "ARIMA", value=arima_ok, disabled=not arima_ok, key="fc_m_arima",
+                )
+
+            with col_v:
+                st.markdown("**Select Variables**")
+                fc_vars: dict = {}
+                for col in fc_columns:
+                    fc_vars[col] = st.checkbox(
+                        VARIABLE_LABELS.get(col, col), value=True, key=f"fc_v_{col}"
+                    )
+
+            active_fc_models = [mn for mn, v in fc_sel.items()  if v]
+            active_fc_vars   = [col for col, v in fc_vars.items() if v]
+
+            if not active_fc_models:
+                st.error("Select at least one model.")
+            elif not active_fc_vars:
+                st.error("Select at least one variable.")
+            else:
+                last_d = pd.Timestamp(forecast_data["last_test_date"])
+                st.info(
+                    f"Last data point in cache: **{last_d.strftime('%B %d, %Y')}**  "
+                    f"— forecast covers the following 7 days."
+                )
+                gen_btn = st.button(
+                    "Generate 7-Day Forecast", type="primary", key="fc_gen"
+                )
+
+                if gen_btn:
+                    with st.spinner("Generating forecast..."):
+                        try:
+                            forecasts, forecast_dates = _generate_forecast(
+                                forecast_data,
+                                fc_station,
+                                active_fc_models,
+                                station_dl,
+                            )
+                        except Exception as exc:
+                            st.error(f"Forecast failed: {exc}")
+                            st.stop()
+
+                    st.success(
+                        f"Forecast ready — "
+                        f"**{forecast_dates[0].strftime('%A, %b %d')}** "
+                        f"to "
+                        f"**{forecast_dates[-1].strftime('%A, %b %d %Y')}**"
+                    )
+
+                    col_idx_map = {col: i for i, col in enumerate(fc_columns)}
+
+                    for col in active_fc_vars:
+                        ci        = col_idx_map[col]
+                        var_label = VARIABLE_LABELS.get(col, col)
+
+                        st.markdown(f"#### {var_label}")
+
+                        # ── Detailed table ─────────────────────────────────────
+                        rows = []
+                        for d_i, d in enumerate(forecast_dates):
+                            row = {
+                                "Day":  d.strftime("%A"),
+                                "Date": d.strftime("%b %d, %Y"),
+                            }
+                            for mn in active_fc_models:
+                                if mn in forecasts:
+                                    row[mn] = round(float(forecasts[mn][d_i, ci]), 4)
+                            rows.append(row)
+
+                        st.dataframe(
+                            pd.DataFrame(rows),
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+
+                        # ── Line chart ─────────────────────────────────────────
+                        fig, ax = plt.subplots(figsize=(10, 3.5))
+                        x_labels = [
+                            f"{d.strftime('%a')}\n{d.strftime('%b %d')}"
+                            for d in forecast_dates
+                        ]
+                        for mn in active_fc_models:
+                            if mn in forecasts:
+                                ax.plot(
+                                    x_labels,
+                                    forecasts[mn][:, ci],
+                                    marker="o",
+                                    color=MODEL_COLORS.get(mn, "gray"),
+                                    linewidth=2.0,
+                                    markersize=6,
+                                    label=mn,
+                                )
+                        ax.set_title(
+                            f"{fc_station}  —  {var_label}  |  7-Day Forecast",
+                            fontsize=11, fontweight="bold",
+                        )
+                        ax.set_ylabel(var_label, fontsize=9)
+                        ax.legend(fontsize=8, loc="best")
+                        ax.grid(True, alpha=0.25, linestyle=":")
+                        ax.spines[["top", "right"]].set_visible(False)
+                        plt.tight_layout()
+                        st.pyplot(fig, use_container_width=True)
+                        plt.close(fig)
+
+                        st.divider()
+
+    # ── Tab 4: Download ────────────────────────────────────────────────────────
     with tab_dl:
         st.subheader("Download Plots")
         st.caption("Each figure is saved at 150 dpi as a PNG.")

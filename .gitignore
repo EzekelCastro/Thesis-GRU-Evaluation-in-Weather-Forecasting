@@ -13,6 +13,10 @@ env/
 # Generated outputs
 plots/
 
+# Cache: commit results_*.pkl / meta_*.json for Streamlit Cloud persistence
+# Exclude DL model weights — too large for git (~50-60 MB)
+cache/models_*.pkl
+
 # OS
 .DS_Store
 Thumbs.db
