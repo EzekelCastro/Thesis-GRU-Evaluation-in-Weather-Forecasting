@@ -40,6 +40,12 @@ VARIABLE_LABELS = {
     "temp": "Avg Temp (°C)",
     "wspd": "Wind Speed (km/h)",
     "pres": "Pressure (hPa)",
+    "dwpt": "Dew Point (°C)",
+    "rhum": "Rel. Humidity (%)",
+    "snow": "Snow Depth (mm)",
+    "wdir": "Wind Dir. (°)",
+    "wpgt": "Peak Gust (km/h)",
+    "tsun": "Sunshine (min)",
 }
 
 TABLE_HEADER_COLOR  = "#2c3e50"

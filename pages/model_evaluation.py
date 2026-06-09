@@ -23,7 +23,7 @@ import pandas as pd
 import streamlit as st
 from datetime import datetime, date, timedelta
 
-from data_fetch import fetch_all_data, TARGET_COLUMNS
+from data_fetch import fetch_all_data, TARGET_COLUMNS, ALL_METEOSTAT_VARS
 from preprocessing import preprocess_station
 from models import (
     DEVICE,
@@ -120,13 +120,14 @@ def _fig_to_bytes(fig: plt.Figure) -> bytes:
 _CACHE_DIR = "cache"
 
 
-def _make_cache_key(start_date, end_date, stations, models,
+def _make_cache_key(start_date, end_date, stations, models, variables,
                     epochs, hidden_size, seq_len, batch_size,
                     patience, num_layers, dropout) -> str:
     s = "|".join([
         str(start_date), str(end_date),
         ",".join(sorted(stations)),
         ",".join(sorted(models)),
+        ",".join(sorted(variables)),
         str(epochs), str(hidden_size), str(seq_len),
         str(batch_size), str(patience), str(num_layers), str(dropout),
     ])
@@ -192,6 +193,33 @@ def _load_models_cache(key: str) -> dict | None:
         return None
     with open(path, "rb") as f:
         return pickle.load(f)
+
+
+def _scan_all_cache_metas() -> list[tuple[str, dict]]:
+    """Return [(key, meta), ...] for all valid cached results, newest first."""
+    if not os.path.exists(_CACHE_DIR):
+        return []
+    entries = []
+    for fname in os.listdir(_CACHE_DIR):
+        if not (fname.startswith("meta_") and fname.endswith(".json")):
+            continue
+        key = fname[5:-5]
+        if not os.path.exists(_pkl_path(key)):
+            continue
+        try:
+            with open(os.path.join(_CACHE_DIR, fname)) as f:
+                meta = json.load(f)
+            entries.append((key, meta))
+        except Exception:
+            pass
+    entries.sort(key=lambda x: x[1].get("saved_at", ""), reverse=True)
+    return entries
+
+
+_SHORT_MODEL = {
+    "GRU": "GRU", "LSTM": "LSTM", "SimpleRNN": "RNN",
+    "LinearRegression": "LR", "ARIMA": "ARIMA",
+}
 
 
 def _generate_forecast(
@@ -321,54 +349,106 @@ with st.sidebar:
 
     st.divider()
 
-    with st.expander("Deep Learning Settings", expanded=False):
-        epochs      = st.slider("Epochs",                  10,  200,  100, step=10)
-        hidden_size = st.select_slider("Hidden Size",      [64, 128, 256], value=256)
-        seq_len     = st.slider("Sequence Length (days)",   7,   60,   30)
-        batch_size  = st.select_slider("Batch Size",       [16, 32, 64],  value=32)
-        patience    = st.slider("Early Stop Patience",      5,   30,   20)
-        num_layers  = st.slider("Stacked RNN Layers",       1,    4,    3)
-        dropout     = st.slider("Dropout",                0.0,  0.5, 0.2, step=0.05)
+    st.subheader("Variables")
+    st.caption("Select inputs/targets for all models.")
+    sel_vars = {
+        "prcp": st.checkbox("Precipitation (mm)",      value=True,  key="var_prcp"),
+        "temp": st.checkbox("Avg Temperature (°C)",    value=True,  key="var_temp"),
+        "wspd": st.checkbox("Wind Speed (km/h)",       value=True,  key="var_wspd"),
+        "pres": st.checkbox("Pressure (hPa)",          value=True,  key="var_pres"),
+        "dwpt": st.checkbox("Dew Point (°C)",          value=False, key="var_dwpt"),
+        "rhum": st.checkbox("Rel. Humidity (%)",       value=False, key="var_rhum"),
+        "snow": st.checkbox("Snow Depth (mm)",         value=False, key="var_snow"),
+        "wdir": st.checkbox("Wind Direction (°)",      value=False, key="var_wdir"),
+        "wpgt": st.checkbox("Peak Wind Gust (km/h)",   value=False, key="var_wpgt"),
+        "tsun": st.checkbox("Sunshine Duration (min)", value=False, key="var_tsun"),
+    }
 
     st.divider()
 
-    # Derive the cache key from current sidebar settings
+    with st.expander("Deep Learning Settings", expanded=False):
+        epochs      = st.slider("Epochs",                  10,  200,  200, step=10)
+        hidden_size = st.select_slider("Hidden Size",      [64, 128, 256], value=256)
+        seq_len     = st.slider("Sequence Length (days)",   7,   60,   45)
+        batch_size  = st.select_slider("Batch Size",       [16, 32, 64],  value=16)
+        patience    = st.slider("Early Stop Patience",      5,   50,   30)
+        num_layers  = st.slider("Stacked RNN Layers",       1,    4,    2)
+        dropout     = st.slider("Dropout",                0.0,  0.5, 0.3, step=0.05)
+
+    st.divider()
+
+    # Compute cache key for the current settings (used to highlight matching entry)
     _preview_stations = [k for k, v in {"Baguio": sel_baguio, "Manila": sel_manila}.items() if v]
     _preview_models   = [k for k, v in sel_models.items() if v]
+    _preview_vars     = [k for k, v in sel_vars.items() if v]
     _cache_key = _make_cache_key(
-        start_date, end_date, _preview_stations, _preview_models,
+        start_date, end_date, _preview_stations, _preview_models, _preview_vars,
         epochs, hidden_size, seq_len, batch_size, patience, num_layers, dropout,
     )
-    _cached_meta = _load_cache_meta(_cache_key)
 
-    if _cached_meta:
-        st.success(
-            f"Saved results found\n\n"
-            f"**{_cached_meta['saved_at']}**\n\n"
-            f"Stations: {', '.join(_cached_meta['stations'])}\n\n"
-            f"Models: {', '.join(_cached_meta['models'])}"
-        )
-        load_cache_btn = st.button(
-            "Load Saved Results", type="primary", use_container_width=True
-        )
-    else:
-        load_cache_btn = False
+    run_btn   = st.button("▶ Run Analysis", type="primary", use_container_width=True)
+    clear_btn = st.button("Clear Display",  type="secondary", use_container_width=True)
 
-    run_btn   = st.button(
-        "Run Analysis",
-        type="secondary" if _cached_meta else "primary",
-        use_container_width=True,
-    )
-    clear_btn = st.button("Clear Display", type="secondary", use_container_width=True)
-
+    # ── Saved Results ──────────────────────────────────────────────────────────
     st.divider()
+    st.subheader("Saved Results")
 
-    with st.expander("Cache Management"):
-        cache_files = len(os.listdir(_CACHE_DIR)) // 2 if os.path.exists(_CACHE_DIR) else 0
-        st.caption(f"{cache_files} saved result(s) on disk.")
-        clear_cache_btn = st.button(
-            "Delete All Saved Results", type="secondary", use_container_width=True
-        )
+    _all_metas = _scan_all_cache_metas()
+
+    if not _all_metas:
+        st.caption("No saved results yet. Run an analysis to create one.")
+    else:
+        st.caption(f"{len(_all_metas)} result(s) saved on disk")
+
+        for _mk, _mm in _all_metas:
+            _is_current = (_mk == _cache_key)
+            _stn_str    = ", ".join(_mm.get("stations", []))
+            _mdl_str    = ", ".join(_SHORT_MODEL.get(m, m) for m in _mm.get("models", []))
+            _var_str    = ", ".join(_mm.get("variables", TARGET_COLUMNS))
+            _date_str   = _mm.get("saved_at", "Unknown date")
+
+            with st.container(border=True):
+                if _is_current:
+                    st.caption(f"🟢 **{_date_str}**  ← matches settings")
+                else:
+                    st.caption(f"📅 {_date_str}")
+
+                st.caption(f"📍 {_stn_str}")
+                st.caption(f"🤖 {_mdl_str}")
+                st.caption(f"📊 {_var_str}")
+
+                _col_l, _col_d = st.columns([3, 1])
+                with _col_l:
+                    if st.button(
+                        "Load",
+                        key=f"load_{_mk}",
+                        use_container_width=True,
+                        type="primary" if _is_current else "secondary",
+                    ):
+                        _res = _load_cache(_mk)
+                        if _res:
+                            st.session_state.results = _res
+                            st.toast("Results loaded!", icon="💾")
+                            st.rerun()
+                        else:
+                            st.error("Cache file missing — try re-running the analysis.")
+
+                with _col_d:
+                    if st.button("🗑", key=f"del_{_mk}", use_container_width=True,
+                                 help="Delete this saved result"):
+                        for _p in [_pkl_path(_mk), _meta_path(_mk), _models_pkl_path(_mk)]:
+                            if os.path.exists(_p):
+                                os.remove(_p)
+                        st.toast("Result deleted.", icon="🗑️")
+                        st.rerun()
+
+        st.divider()
+        if st.button("🗑 Delete All Saved Results", type="secondary",
+                     use_container_width=True, key="del_all_cache"):
+            _n = _clear_all_cache()
+            st.session_state.results = None
+            st.toast(f"Deleted {_n} file(s).", icon="🗑️")
+            st.rerun()
 
     st.divider()
     st.caption(f"Device: `{DEVICE}`")
@@ -383,21 +463,6 @@ if "results" not in st.session_state:
 if clear_btn:
     st.session_state.results = None
     st.rerun()
-
-if clear_cache_btn:
-    n = _clear_all_cache()
-    st.session_state.results = None
-    st.toast(f"Deleted {n} cache file(s).", icon="🗑️")
-    st.rerun()
-
-if load_cache_btn:
-    cached = _load_cache(_cache_key)
-    if cached:
-        st.session_state.results = cached
-        st.toast("Results loaded from cache!", icon="💾")
-        st.rerun()
-    else:
-        st.error("Cache file not found. Please run a fresh analysis.")
 
 
 # ── Page header ────────────────────────────────────────────────────────────────
@@ -415,6 +480,7 @@ st.divider()
 if run_btn:
     active_stations = [k for k, v in {"Baguio": sel_baguio, "Manila": sel_manila}.items() if v]
     active_models   = [k for k, v in sel_models.items() if v]
+    active_vars     = [k for k, v in sel_vars.items() if v]
 
     # Validation
     if not active_stations:
@@ -422,6 +488,9 @@ if run_btn:
         st.stop()
     if not active_models:
         st.error("Please select at least one model.")
+        st.stop()
+    if not active_vars:
+        st.error("Please select at least one variable.")
         st.stop()
     if start_date >= end_date:
         st.error("Start date must be before end date.")
@@ -439,6 +508,7 @@ if run_btn:
         all_data = fetch_all_data(
             datetime.combine(start_date, datetime.min.time()),
             datetime.combine(end_date,   datetime.min.time()),
+            columns=active_vars,
         )
         filtered = {k: v for k, v in all_data.items() if k in active_stations}
         total_records = sum(len(v) for v in filtered.values())
@@ -450,7 +520,7 @@ if run_btn:
 
             # ── Preprocess ─────────────────────────────────────────────────────
             st.write(f"Preprocessing {station_name}...")
-            proc    = preprocess_station(df, columns=TARGET_COLUMNS, seq_len=seq_len)
+            proc    = preprocess_station(df, columns=active_vars, seq_len=seq_len)
             X_train = proc["X_train"]
             y_train = proc["y_train"]
             X_test  = proc["X_test"]
@@ -547,6 +617,7 @@ if run_btn:
             "saved_at":   datetime.now().strftime("%Y-%m-%d %H:%M"),
             "stations":   active_stations,
             "models":     active_models,
+            "variables":  active_vars,
             "date_range": f"{start_date} → {end_date}",
             "epochs":     epochs,
             "seq_len":    seq_len,

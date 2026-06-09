@@ -17,17 +17,30 @@ STATIONS = {
     "Manila": "98425",
 }
 
-# Variables we care about throughout the whole pipeline.
-# 'temp' is the average daily temperature column in Meteostat v2.
+# All variables available in Meteostat daily data
+ALL_METEOSTAT_VARS = [
+    "temp", "dwpt", "rhum", "prcp", "snow",
+    "wdir", "wspd", "wpgt", "pres", "tsun",
+]
+
+# Default target columns (backward-compatible)
 TARGET_COLUMNS = ["prcp", "temp", "wspd", "pres"]
 
 
-def fetch_station_data(station_id: str, start: datetime, end: datetime) -> pd.DataFrame:
+def fetch_station_data(
+    station_id: str,
+    start: datetime,
+    end: datetime,
+    columns: list | None = None,
+) -> pd.DataFrame:
     """
-    Pull daily weather records for one station and return only the
-    four target columns.  Columns absent from the station are added as
-    all-NaN so downstream code always has the full schema.
+    Pull daily weather records for one station and return the requested columns.
+    Columns absent from the station are added as all-NaN so downstream code
+    always has the full schema.  Defaults to TARGET_COLUMNS.
     """
+    if columns is None:
+        columns = TARGET_COLUMNS
+
     ts = daily(station_id, start, end)
     df = ts.fetch()
 
@@ -40,17 +53,18 @@ def fetch_station_data(station_id: str, start: datetime, end: datetime) -> pd.Da
             f"between {start.date()} and {end.date()}."
         )
 
-    # Keep only the columns we need; add missing ones as NaN
-    for col in TARGET_COLUMNS:
+    # Keep only the requested columns; add missing ones as NaN
+    for col in columns:
         if col not in df.columns:
             df[col] = float("nan")
 
-    return df[TARGET_COLUMNS]
+    return df[columns]
 
 
 def fetch_all_data(
     start: datetime | None = None,
     end: datetime | None = None,
+    columns: list | None = None,
 ) -> dict[str, pd.DataFrame]:
     """
     Fetch data for every station in STATIONS.
@@ -67,7 +81,7 @@ def fetch_all_data(
     result = {}
     for name, sid in STATIONS.items():
         print(f"  {name} (Station {sid}) ...", end=" ", flush=True)
-        df = fetch_station_data(sid, start, end)
+        df = fetch_station_data(sid, start, end, columns=columns)
         print(f"{len(df)} daily records retrieved.")
         result[name] = df
 
