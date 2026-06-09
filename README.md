@@ -5,13 +5,16 @@
 # IN PARTIAL FULFILMENT OF THE REQUIREMENTS FOR THE DEGREEE: BACHELOR OF SCIENCE IN COMPUTER SCIENCE
 
 # UNIVERSITY OF THE CORDILLERAS, GOVERNOR PACK ROAD, BAGUIO CITY, BENGUET, PHILIPPINES
+
 # COLLEGE OF COMPUTER SCIENCE AND INFORMATION TECHNOLOGY (CITCS)
 
 # MEMBERS:
-# EZEKIEL MENDOZA CASTRO
-# DEVIN JOSHUA SOCALO MILLAN
-# JERIC ESCAÑO MONDOÑEDO
 
+# EZEKIEL MENDOZA CASTRO
+
+# DEVIN JOSHUA SOCALO MILLAN
+
+# JERIC ESCAÑO MONDOÑEDO
 
 This System Compares **GRU, LSTM, SimpleRNN, Linear Regression, and ARIMA** for predicting
 rainfall, temperature, wind speed, and pressure at **Baguio City** and **Manila**
@@ -23,11 +26,11 @@ using Meteostat daily weather data.
 
 Before you begin, make sure the following are installed on your machine:
 
-| Tool | Download Link |
-|---|---|
+| Tool                | Download Link                     |
+| ------------------- | --------------------------------- |
 | Python 3.10 – 3.13 | https://www.python.org/downloads/ |
-| Git | https://git-scm.com/downloads |
-| VS Code | https://code.visualstudio.com/ |
+| Git                 | https://git-scm.com/downloads     |
+| VS Code             | https://code.visualstudio.com/    |
 
 > **GPU (optional but recommended):** If you have an NVIDIA GPU, install the
 > [CUDA Toolkit](https://developer.nvidia.com/cuda-downloads) so training runs faster.
@@ -56,6 +59,7 @@ code .
 ### Step 2 — Open the VS Code terminal
 
 Inside VS Code, open the integrated terminal:
+
 - **Windows:** `Ctrl + `` ` (backtick) or go to **Terminal → New Terminal**
 
 All commands from this point are typed in that terminal.
@@ -151,13 +155,13 @@ Results are saved as PNG files inside the `plots/` folder.
 
 ## Troubleshooting
 
-| Problem | Fix |
-|---|---|
-| `python` not found | Use `python3` instead, or check your Python installation |
+| Problem                                | Fix                                                                       |
+| -------------------------------------- | ------------------------------------------------------------------------- |
+| `python` not found                   | Use `python3` instead, or check your Python installation                |
 | `.venv\Scripts\Activate.ps1` blocked | Run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` in PowerShell |
-| GPU not detected | Make sure you installed the CUDA version of PyTorch (Step 5 Option A) |
-| `meteostat` returns no data | Check your internet connection; Meteostat requires network access |
-| Port 8501 already in use | Run `python -m streamlit run app.py --server.port 8502` |
+| GPU not detected                       | Make sure you installed the CUDA version of PyTorch (Step 5 Option A)     |
+| `meteostat` returns no data          | Check your internet connection; Meteostat requires network access         |
+| Port 8501 already in use               | Run `python -m streamlit run app.py --server.port 8502`                 |
 
 ---
 

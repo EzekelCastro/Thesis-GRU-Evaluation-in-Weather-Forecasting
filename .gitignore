@@ -14,8 +14,9 @@ env/
 plots/
 
 # Cache: commit results_*.pkl / meta_*.json for Streamlit Cloud persistence
-# Exclude DL model weights — too large for git (~50-60 MB)
+# Exclude DL model weights and ablation results — too large for git
 cache/models_*.pkl
+cache/ablation_*.pkl
 
 # OS
 .DS_Store

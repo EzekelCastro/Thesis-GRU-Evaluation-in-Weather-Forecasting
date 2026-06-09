@@ -1,13 +1,16 @@
 """
 evaluation.py
-Computes four metrics per (model, variable) pair:
+Computes six metrics per (model, variable) pair:
   • Accuracy  — (1 - MAPE) × 100 %     (NaN-safe; trace values skipped)
   • MSE       — Mean Squared Error
   • MAE       — Mean Absolute Error
   • R²        — Coefficient of determination
+  • t-stat    — Paired t-test statistic  (pred vs actual)
+  • p-value   — Two-tailed p-value from the paired t-test
 """
 
 import numpy as np
+from scipy import stats
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 
 # Minimum absolute value of y_true included in MAPE.
@@ -34,13 +37,29 @@ def model_accuracy(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     return float("nan") if np.isnan(m) else max(0.0, 100.0 - m)
 
 
+def _paired_ttest(y_true: np.ndarray, y_pred: np.ndarray) -> tuple[float, float]:
+    """
+    Paired t-test: H0 = mean(y_pred - y_true) == 0.
+    High p-value (> 0.05) means no statistically significant bias.
+    Returns (t_stat, p_value), both NaN on degenerate input.
+    """
+    try:
+        t, p = stats.ttest_rel(y_pred, y_true)
+        return float(t), float(p)
+    except Exception:
+        return float("nan"), float("nan")
+
+
 def compute_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
-    """Return all four metrics as a flat dict."""
+    """Return all six metrics as a flat dict."""
+    t_stat, p_value = _paired_ttest(y_true, y_pred)
     return {
         "Accuracy (%)": model_accuracy(y_true, y_pred),
         "MSE":           float(mean_squared_error(y_true, y_pred)),
         "MAE":           float(mean_absolute_error(y_true, y_pred)),
         "R2":            float(r2_score(y_true, y_pred)),
+        "t-stat":        t_stat,
+        "p-value":       p_value,
     }
 
 
@@ -89,9 +108,11 @@ def print_metrics_summary(
             m = col_metrics[col]
             acc  = m["Accuracy (%)"]
             acc_s = f"{acc:.2f}%" if not np.isnan(acc) else "  N/A  "
+            p_s = f"{m['p-value']:.4f}" if not np.isnan(m["p-value"]) else "  N/A"
             print(
                 f"    {col:<6}  Acc={acc_s:>8}  "
                 f"MSE={m['MSE']:>10.4f}  "
                 f"MAE={m['MAE']:>9.4f}  "
-                f"R²={m['R2']:>7.4f}"
+                f"R²={m['R2']:>7.4f}  "
+                f"t={m['t-stat']:>8.4f}  p={p_s}"
             )
