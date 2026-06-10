@@ -562,9 +562,10 @@ if run_btn:
                 elif model_name == "ARIMA":
                     arima_m = train_all_arima(proc["train_df"], columns)
                     raw_preds[model_name] = predict_arima(
-                        arima_m, len(test_df), seq_len, columns
+                        arima_m, len(test_df), seq_len, columns,
+                        test_series=test_df[columns].values.astype(np.float32),
                     )
-                    _arima_m_station = arima_m
+                    _arima_m_station = arima_m  # unchanged (predict_arima deep-copies internally)
 
                 step += 1
                 progress_bar.progress(step / total_steps,

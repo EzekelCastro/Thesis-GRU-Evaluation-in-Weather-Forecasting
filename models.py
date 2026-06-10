@@ -10,6 +10,7 @@ Defines, builds, trains, and runs inference for all five models:
 GPU acceleration: CUDA > Apple MPS > CPU, auto-detected at import time.
 """
 
+import copy
 import warnings
 import numpy as np
 import torch
@@ -249,16 +250,59 @@ def train_all_arima(train_df, columns: list) -> dict:
 
 
 def predict_arima(
-    arima_models: dict, test_df_len: int, seq_len: int, columns: list
+    arima_models: dict,
+    test_df_len: int,
+    seq_len: int,
+    columns: list,
+    test_series: np.ndarray | None = None,
 ) -> np.ndarray:
     """
-    Forecast `test_df_len` steps from the end of training, then slice off
-    the first `seq_len` positions so the result aligns with y_test (which
-    also starts `seq_len` steps into the test window).
+    Rolling 1-step-ahead ARIMA forecast aligned with y_test.
+
+    When test_series (shape: test_df_len × n_cols, scaled) is supplied, each
+    column's model is deep-copied then updated with test[0:seq_len] (matching
+    the context window DL models see), followed by n_out rolling 1-step-ahead
+    predictions where the true test value is fed back after each step.  This
+    prevents the long-horizon mean-reversion / sign-divergence artefact.
+
+    The originals in arima_models are never modified (safe for the 7-day
+    forecast which calls update() on them later).
+
+    Falls back to bulk forecasting + [0, 1] clipping when rolling fails.
     Returns shape (test_df_len - seq_len, n_cols).
     """
-    preds = []
-    for col in columns:
-        forecast = arima_models[col].predict(n_periods=test_df_len)
-        preds.append(forecast[seq_len:])   # align with y_test
-    return np.column_stack(preds).astype(np.float32)
+    n_out = test_df_len - seq_len
+    col_preds = []
+
+    for j, col in enumerate(columns):
+        preds_for_col: list[float] = []
+
+        if test_series is not None:
+            try:
+                m = copy.deepcopy(arima_models[col])
+                # Provide the same context window the DL models see at step 0
+                m.update(test_series[:seq_len, j].tolist(), refit=False)
+                # Rolling 1-step-ahead through the full evaluation window
+                for i in range(n_out):
+                    fc = float(np.clip(m.predict(n_periods=1)[0], 0.0, 1.0))
+                    preds_for_col.append(fc)
+                    m.update([float(test_series[seq_len + i, j])], refit=False)
+            except Exception:
+                # Fallback: bulk forecast with clipping
+                preds_for_col = list(
+                    np.clip(
+                        arima_models[col].predict(n_periods=test_df_len)[seq_len:],
+                        0.0, 1.0,
+                    )
+                )
+        else:
+            preds_for_col = list(
+                np.clip(
+                    arima_models[col].predict(n_periods=test_df_len)[seq_len:],
+                    0.0, 1.0,
+                )
+            )
+
+        col_preds.append(np.array(preds_for_col, dtype=np.float32))
+
+    return np.column_stack(col_preds).astype(np.float32)

@@ -1,0 +1,1 @@
+{"saved_at": "2026-06-10 09:28", "stations": ["Baguio", "Manila"], "models": ["GRU", "LSTM", "SimpleRNN", "LinearRegression", "ARIMA"], "variables": ["temp", "wspd", "pres", "rhum"], "date_range": "2020-01-01 \u2192 2026-06-10", "epochs": 200, "seq_len": 45}

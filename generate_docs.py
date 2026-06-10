@@ -357,8 +357,10 @@ def build_tech_brief():
     lsec("Methodology")
     lbody(
         "Data cleaned via IQR outlier removal and MinMax scaling. "
-        "Deep learning models use sliding-window sequences (seq_len=30) with "
-        "early stopping (patience=20). Results cached for instant reload.",
+        "Deep learning models use sliding-window sequences (seq_len=45) with "
+        "early stopping (patience=30). A Variable Importance page runs "
+        "leave-one-out ablation across all 4 targets × both stations to guide "
+        "variable selection from all 10 Meteostat inputs.",
         sa=0,
     )
 
@@ -399,7 +401,7 @@ def build_tech_brief():
     p_arch.paragraph_format.space_before = Pt(2)
     p_arch.paragraph_format.space_after  = Pt(2)
     r_arch = p_arch.add_run(
-        "GRU & LSTM: 3-layer Bidirectional, hidden=256, dropout=0.2, epochs=200\n"
+        "GRU & LSTM: 2-layer Bidirectional, hidden=256, dropout=0.3, seq_len=45, epochs=200\n"
         "SimpleRNN: Unidirectional  ·  LR: flattened multivariate  ·  ARIMA: auto_arima (AIC)"
     )
     r_arch.font.size = Pt(7.5); r_arch.italic = True
