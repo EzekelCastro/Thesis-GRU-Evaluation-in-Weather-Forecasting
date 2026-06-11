@@ -9,6 +9,7 @@ import json
 import os
 import sys
 import pickle
+import time
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -87,14 +88,23 @@ def _make_prediction_figure(station_name: str, res: dict) -> plt.Figure:
 
 # ── Helper: build a metrics DataFrame for one variable ────────────────────────
 
-def _metrics_dataframe(metrics: dict, model_names: list, col: str) -> pd.DataFrame:
+def _fmt_time(seconds: float) -> str:
+    """Format elapsed seconds as a readable string."""
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    m, s = divmod(int(seconds), 60)
+    return f"{m}m {s:02d}s"
+
+
+def _metrics_dataframe(metrics: dict, model_names: list, col: str,
+                       train_times: dict | None = None) -> pd.DataFrame:
     rows = []
     for mn in model_names:
         m = metrics[mn][col]
         acc = m["Accuracy (%)"]
         p   = m.get("p-value", float("nan"))
         t   = m.get("t-stat",  float("nan"))
-        rows.append({
+        row = {
             "Model":        mn,
             "Accuracy (%)": round(acc, 2) if not np.isnan(acc) else float("nan"),
             "MSE":          round(m["MSE"], 5),
@@ -102,7 +112,10 @@ def _metrics_dataframe(metrics: dict, model_names: list, col: str) -> pd.DataFra
             "R2":           round(m["R2"], 4),
             "t-stat":       round(t, 4)   if not np.isnan(t) else float("nan"),
             "p-value":      round(p, 4)   if not np.isnan(p) else float("nan"),
-        })
+        }
+        if train_times:
+            row["Train Time"] = _fmt_time(train_times.get(mn, float("nan")))
+        rows.append(row)
     return pd.DataFrame(rows).set_index("Model")
 
 
@@ -535,6 +548,7 @@ if run_btn:
             _dl_states_station: dict = {}
             _arima_m_station        = None
             _lr_m_station           = None
+            train_times:       dict = {}
 
             # ── Train each model ───────────────────────────────────────────────
             for model_name in active_models:
@@ -542,6 +556,8 @@ if run_btn:
                 text = f"Training {model_name} for {station_name}..."
                 progress_bar.progress(pct, text=text)
                 st.write(f"  {model_name} — {station_name}...")
+
+                t0 = time.perf_counter()
 
                 if model_name in ("GRU", "LSTM", "SimpleRNN"):
                     m = build_model(model_name, n_feat, n_out, hidden_size, num_layers, dropout)
@@ -567,6 +583,7 @@ if run_btn:
                     )
                     _arima_m_station = arima_m  # unchanged (predict_arima deep-copies internally)
 
+                train_times[model_name] = time.perf_counter() - t0
                 step += 1
                 progress_bar.progress(step / total_steps,
                                       text=f"Done: {model_name} — {station_name}")
@@ -580,6 +597,7 @@ if run_btn:
                 "actuals":     y_true_orig,
                 "predictions": preds_orig,
                 "metrics":     metrics,
+                "train_times": train_times,
                 "columns":     columns,
                 "dates":       test_df.index[seq_len:],
                 "forecast_data": {
@@ -690,7 +708,10 @@ if st.session_state.results:
             for col_idx, col in enumerate(all_columns):
                 with metric_cols[col_idx]:
                     st.markdown(f"**{VARIABLE_LABELS.get(col, col)}**")
-                    df_m = _metrics_dataframe(res["metrics"], model_names, col)
+                    df_m = _metrics_dataframe(
+                        res["metrics"], model_names, col,
+                        train_times=res.get("train_times"),
+                    )
 
                     def _style(df):
                         best  = df["R2"].idxmax()
