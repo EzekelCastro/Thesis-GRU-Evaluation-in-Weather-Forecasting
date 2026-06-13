@@ -20,6 +20,8 @@ import matplotlib
 matplotlib.use("Agg")          # non-interactive backend required by Streamlit
 import matplotlib.pyplot as plt
 import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import pandas as pd
 import streamlit as st
 from datetime import datetime, date, timedelta
@@ -47,42 +49,65 @@ def _inverse(arr: np.ndarray, scalers: dict, columns: list) -> np.ndarray:
     return out
 
 
-# ── Helper: build a matplotlib figure for one station ─────────────────────────
+# ── Helper: build an interactive Plotly figure for one station ────────────────
 
-def _make_prediction_figure(station_name: str, res: dict) -> plt.Figure:
+def _make_prediction_figure(station_name: str, res: dict) -> go.Figure:
     columns     = res["columns"]
     actuals     = res["actuals"]
     predictions = res["predictions"]
     dates       = res["dates"]
     model_names = list(predictions.keys())
-    n_vars      = len(columns)
 
-    fig, axes = plt.subplots(
-        2, 2, figsize=(14, 9),
-        constrained_layout=True,
+    titles = [VARIABLE_LABELS.get(c, c) for c in columns]
+    while len(titles) < 4:
+        titles.append("")
+
+    fig = make_subplots(
+        rows=2, cols=2,
+        subplot_titles=titles,
+        vertical_spacing=0.12,
+        horizontal_spacing=0.08,
     )
-    axes = axes.flatten()
+
+    positions = [(1, 1), (1, 2), (2, 1), (2, 2)]
+    dates_list = list(dates)
 
     for idx, col in enumerate(columns):
-        ax = axes[idx]
-        ax.plot(dates, actuals[:, idx],
-                color="black", linewidth=1.8, label="Actual", zorder=5, alpha=0.9)
+        row, c = positions[idx]
+        first = idx == 0
+
+        fig.add_trace(go.Scatter(
+            x=dates_list,
+            y=actuals[:, idx].tolist(),
+            name="Actual",
+            line=dict(color="black", width=2),
+            legendgroup="Actual",
+            showlegend=first,
+            hovertemplate="<b>Actual</b>: %{y:.3f}<extra></extra>",
+        ), row=row, col=c)
+
         for mn in model_names:
-            ax.plot(dates, predictions[mn][:, idx],
-                    color=MODEL_COLORS.get(mn, "gray"),
-                    linewidth=1.1, linestyle="--", alpha=0.80, label=mn)
-        ax.set_title(VARIABLE_LABELS.get(col, col), fontsize=11, fontweight="bold")
-        ax.set_xlabel("Date", fontsize=8)
-        ax.set_ylabel(VARIABLE_LABELS.get(col, col), fontsize=8)
-        ax.legend(fontsize=7, loc="best", framealpha=0.7)
-        ax.grid(True, alpha=0.25, linestyle=":")
-        ax.tick_params(axis="x", rotation=30, labelsize=7)
+            fig.add_trace(go.Scatter(
+                x=dates_list,
+                y=predictions[mn][:, idx].tolist(),
+                name=mn,
+                line=dict(color=MODEL_COLORS.get(mn, "gray"), width=1.4, dash="dash"),
+                legendgroup=mn,
+                showlegend=first,
+                hovertemplate=f"<b>{mn}</b>: %{{y:.3f}}<extra></extra>",
+            ), row=row, col=c)
 
-    # Hide any unused subplot slots
-    for idx in range(n_vars, len(axes)):
-        axes[idx].set_visible(False)
-
-    fig.suptitle(f"Predictions — {station_name}", fontsize=14, fontweight="bold")
+    fig.update_layout(
+        title_text=f"Predictions — {station_name}",
+        title_font_size=15,
+        height=650,
+        hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.04, xanchor="right", x=1),
+        margin=dict(t=90, b=40, l=50, r=30),
+        template="plotly_white",
+    )
+    fig.update_xaxes(showgrid=True, gridcolor="#eeeeee")
+    fig.update_yaxes(showgrid=True, gridcolor="#eeeeee")
     return fig
 
 
@@ -671,8 +696,8 @@ if st.session_state.results:
         for station_name, res in results.items():
             container = col_map[station_name]
             fig = _make_prediction_figure(station_name, res)
-            container.pyplot(fig, use_container_width=True)
-            plt.close(fig)
+            container.plotly_chart(fig, use_container_width=True,
+                                   config={"modeBarButtonsToRemove": ["toImage"], "displaylogo": False})
 
     # ── Tab 2: Metrics tables ──────────────────────────────────────────────────
     with tab_metrics:
@@ -725,7 +750,14 @@ if st.session_state.results:
                     st.dataframe(styled, use_container_width=True)
 
             # ── Bar charts ─────────────────────────────────────────────────────
-            st.markdown(f"**{metric_choice} by Model — {station_name}**")
+            zoom_row = st.columns([3, 1])
+            zoom_row[0].markdown(f"**{metric_choice} by Model — {station_name}**")
+            zoom = zoom_row[1].checkbox(
+                "Zoom to differences",
+                value=True,
+                key=f"zoom_{station_name}",
+            )
+
             chart_cols = st.columns(len(all_columns))
             for col_idx, col in enumerate(all_columns):
                 with chart_cols[col_idx]:
@@ -736,30 +768,36 @@ if st.session_state.results:
                     ]
                     bar_colors = [MODEL_COLORS.get(mn, "#cccccc") for mn in model_names]
 
-                    fig, ax = plt.subplots(figsize=(4, 3.2))
-                    bars = ax.bar(labels, values, color=bar_colors,
-                                  edgecolor="white", linewidth=0.6)
+                    fig = go.Figure(go.Bar(
+                        x=labels,
+                        y=values,
+                        marker_color=bar_colors,
+                        text=[f"{v:.4f}" if not np.isnan(v) else "" for v in values],
+                        textposition="outside",
+                        hovertemplate="%{x}: %{y:.4f}<extra></extra>",
+                    ))
 
-                    for bar, val in zip(bars, values):
-                        if not np.isnan(val):
-                            ax.text(
-                                bar.get_x() + bar.get_width() / 2,
-                                bar.get_height(),
-                                f"{val:.3f}",
-                                ha="center", va="bottom", fontsize=6.5,
-                            )
+                    valid = [v for v in values if not np.isnan(v)]
+                    if zoom and len(valid) >= 2:
+                        lo, hi = min(valid), max(valid)
+                        spread = max(hi - lo, hi * 0.005)
+                        y_range = [lo - spread * 1.5, hi + spread * 2.0]
+                    else:
+                        y_range = None
 
-                    ax.set_title(VARIABLE_LABELS.get(col, col),
-                                 fontsize=9, fontweight="bold")
-                    ax.set_xlabel("Model", fontsize=8)
-                    ax.set_ylabel(metric_choice, fontsize=8)
-                    ax.tick_params(axis="x", labelsize=7.5)
-                    ax.tick_params(axis="y", labelsize=7)
-                    ax.grid(axis="y", alpha=0.25, linestyle=":")
-                    ax.spines[["top", "right"]].set_visible(False)
-                    plt.tight_layout()
-                    st.pyplot(fig, use_container_width=True)
-                    plt.close(fig)
+                    fig.update_layout(
+                        title_text=VARIABLE_LABELS.get(col, col),
+                        title_font_size=11,
+                        yaxis_title=metric_choice,
+                        height=300,
+                        margin=dict(t=40, b=20, l=45, r=10),
+                        showlegend=False,
+                        template="plotly_white",
+                        yaxis=dict(range=y_range, gridcolor="#eeeeee"),
+                        xaxis=dict(gridcolor="#eeeeee"),
+                    )
+                    st.plotly_chart(fig, use_container_width=True,
+                                   config={"modeBarButtonsToRemove": ["toImage"], "displaylogo": False})
 
             st.divider()
 
