@@ -4,7 +4,6 @@ Streamlit page — Model Evaluation (Model Comparison Pipeline)
 """
 
 import hashlib
-import io
 import json
 import os
 import sys
@@ -143,14 +142,6 @@ def _metrics_dataframe(metrics: dict, model_names: list, col: str,
         rows.append(row)
     return pd.DataFrame(rows).set_index("Model")
 
-
-# ── Helper: save a figure to bytes for download ───────────────────────────────
-
-def _fig_to_bytes(fig: plt.Figure) -> bytes:
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=150, bbox_inches="tight")
-    buf.seek(0)
-    return buf.read()
 
 
 # ── Cache helpers ──────────────────────────────────────────────────────────────
@@ -678,8 +669,8 @@ if st.session_state.results:
     all_columns = next(iter(results.values()))["columns"]
     model_names = list(next(iter(results.values()))["predictions"].keys())
 
-    tab_pred, tab_metrics, tab_fc, tab_dl = st.tabs(
-        ["Predictions", "Metrics", "Forecast", "Download"]
+    tab_pred, tab_metrics, tab_fc = st.tabs(
+        ["Predictions", "Metrics", "Forecast"]
     )
 
     # ── Tab 1: Prediction plots ────────────────────────────────────────────────
@@ -973,23 +964,6 @@ if st.session_state.results:
 
                         st.divider()
 
-    # ── Tab 4: Download ────────────────────────────────────────────────────────
-    with tab_dl:
-        st.subheader("Download Plots")
-        st.caption("Each figure is saved at 150 dpi as a PNG.")
-
-        for station_name, res in results.items():
-            fig = _make_prediction_figure(station_name, res)
-            png = _fig_to_bytes(fig)
-            plt.close(fig)
-            fname = f"predictions_{station_name.lower().replace(' ', '_')}.png"
-            st.download_button(
-                label=f"Download — {station_name} prediction plot",
-                data=png,
-                file_name=fname,
-                mime="image/png",
-                use_container_width=True,
-            )
 
 else:
     # ── Welcome screen ─────────────────────────────────────────────────────────
