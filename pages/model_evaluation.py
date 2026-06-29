@@ -381,12 +381,12 @@ with st.sidebar:
     st.subheader("Variables")
     st.caption("Select inputs/targets for all models.")
     sel_vars = {
-        "prcp": st.checkbox("Precipitation (mm)",      value=True,  key="var_prcp"),
-        "temp": st.checkbox("Avg Temperature (°C)",    value=True,  key="var_temp"),
-        "wspd": st.checkbox("Wind Speed (km/h)",       value=True,  key="var_wspd"),
-        "pres": st.checkbox("Pressure (hPa)",          value=True,  key="var_pres"),
+        "prcp": st.checkbox("Precipitation (mm )",      value=True,  key="var_prcp"),
+        "temp": st.checkbox("Avg Temperature (°C) - Statistically Significant",    value=True,  key="var_temp"),
+        "wspd": st.checkbox("Wind Speed (km/h) - Statistically Significant",       value=True,  key="var_wspd"),
+        "pres": st.checkbox("Pressure (hPa) - Statistically Significant",          value=True,  key="var_pres"),
         "dwpt": st.checkbox("Dew Point (°C)",          value=False, key="var_dwpt"),
-        "rhum": st.checkbox("Rel. Humidity (%)",       value=False, key="var_rhum"),
+        "rhum": st.checkbox("Rel. Humidity (%) - Statistically Significant",       value=False, key="var_rhum"),
         "snow": st.checkbox("Snow Depth (mm)",         value=False, key="var_snow"),
         "wdir": st.checkbox("Wind Direction (°)",      value=False, key="var_wdir"),
         "wpgt": st.checkbox("Peak Wind Gust (km/h)",   value=False, key="var_wpgt"),
