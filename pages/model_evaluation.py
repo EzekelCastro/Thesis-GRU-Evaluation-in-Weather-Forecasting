@@ -457,6 +457,7 @@ with st.sidebar:
                         _res = _load_cache(_mk)
                         if _res:
                             st.session_state.results = _res
+                            st.session_state.results_key = _mk
                             st.toast("Results loaded!", icon="💾")
                             st.rerun()
                         else:
@@ -488,6 +489,8 @@ with st.sidebar:
 
 if "results" not in st.session_state:
     st.session_state.results = None
+if "results_key" not in st.session_state:
+    st.session_state.results_key = None
 
 if clear_btn:
     st.session_state.results = None
@@ -660,6 +663,7 @@ if run_btn:
     )
     st.toast("Results saved to cache.", icon="💾")
     st.session_state.results = station_results
+    st.session_state.results_key = _cache_key
 
 
 # ── Display results ────────────────────────────────────────────────────────────
@@ -831,10 +835,11 @@ if st.session_state.results:
                 "Re-run the analysis with the updated code to enable forecasting."
             )
         else:
-            forecast_data = fc_res["forecast_data"]
-            fc_columns    = fc_res["columns"]
-            dl_states_all = _load_models_cache(_cache_key)
-            station_dl    = dl_states_all.get(fc_station) if dl_states_all else None
+            forecast_data  = fc_res["forecast_data"]
+            fc_columns     = fc_res["columns"]
+            _results_key   = st.session_state.get("results_key", _cache_key)
+            dl_states_all  = _load_models_cache(_results_key)
+            station_dl     = dl_states_all.get(fc_station) if dl_states_all else None
             has_dl        = station_dl is not None
 
             st.divider()

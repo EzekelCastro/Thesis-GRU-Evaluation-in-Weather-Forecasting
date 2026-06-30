@@ -114,35 +114,38 @@ def create_comparison_figure(
         }
       }
 
-    Layout: 2 grid rows per variable (plot row + table row) × n_stations columns.
+    Layout: n_vars rows × 2 columns (Manila | Baguio).
+    Each variable row = 2 grid rows: prediction plot (tall) + metrics table (short).
     """
     os.makedirs(output_dir, exist_ok=True)
 
-    stations    = list(station_results.keys())
+    stations    = list(station_results.keys())   # e.g. ["Manila", "Baguio City"]
     columns     = station_results[stations[0]]["columns"]
     model_names = list(station_results[stations[0]]["predictions"].keys())
     n_vars      = len(columns)
-    n_stations  = len(stations)
+    n_stations  = len(stations)                  # 2
 
-    # 2 rows per variable: tall plot + shorter table
+    # 2 grid rows per variable: tall plot + shorter table
     n_grid_rows   = n_vars * 2
     height_ratios = [4, 2] * n_vars
 
-    fig = plt.figure(figsize=(13 * n_stations, 8 * n_vars))
+    # Width: ~9 in per station column; height: ~6 in per variable row
+    fig = plt.figure(figsize=(9 * n_stations, 6 * n_vars))
     gs  = gridspec.GridSpec(
         n_grid_rows, n_stations,
         height_ratios=height_ratios,
-        hspace=0.55,
+        hspace=0.65,
         wspace=0.30,
     )
 
     fig.suptitle(
         "Weather Prediction Model Comparison — Baguio City vs Manila (2020 – Present)",
-        fontsize=17,
+        fontsize=16,
         fontweight="bold",
         y=1.005,
     )
 
+    # ── Per-variable rows ────────────────────────────────────────────────────────
     for col_idx, col in enumerate(columns):
         var_label = VARIABLE_LABELS.get(col, col)
         for st_idx, station in enumerate(stations):
@@ -167,7 +170,13 @@ def create_comparison_figure(
                     label=mn,
                 )
 
-            ax_plot.set_title(f"{station}  —  {var_label}", fontsize=11, fontweight="bold")
+            # Show station name only on the first row to act as a column header
+            if col_idx == 0:
+                ax_plot.set_title(
+                    f"{station}\n{var_label}", fontsize=11, fontweight="bold", color="#2c3e50"
+                )
+            else:
+                ax_plot.set_title(var_label, fontsize=10, fontweight="bold")
             ax_plot.set_xlabel("Date", fontsize=8)
             ax_plot.set_ylabel(var_label, fontsize=8)
             ax_plot.legend(fontsize=7, loc="best", framealpha=0.7)
@@ -178,7 +187,7 @@ def create_comparison_figure(
             ax_tbl = fig.add_subplot(gs[col_idx * 2 + 1, st_idx])
             _render_metrics_table(ax_tbl, res["metrics"], model_names, col)
             ax_tbl.set_title(
-                f"Metrics — {station}  {var_label}",
+                f"Metrics — {var_label}",
                 fontsize=8, pad=3, color="#555555",
             )
 
