@@ -20,7 +20,6 @@ matplotlib.use("Agg")          # non-interactive backend required by Streamlit
 import matplotlib.pyplot as plt
 import numpy as np
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 import pandas as pd
 import streamlit as st
 from datetime import datetime, date, timedelta
@@ -50,60 +49,43 @@ def _inverse(arr: np.ndarray, scalers: dict, columns: list) -> np.ndarray:
 
 # ── Helper: build an interactive Plotly figure for one station ────────────────
 
-def _make_prediction_figure(station_name: str, res: dict) -> go.Figure:
+def _make_variable_figure(station_name: str, res: dict, col: str) -> go.Figure:
+    """Single-variable prediction chart for one station."""
     columns     = res["columns"]
+    col_idx     = columns.index(col)
     actuals     = res["actuals"]
     predictions = res["predictions"]
     dates       = res["dates"]
     model_names = list(predictions.keys())
+    dates_list  = list(dates)
+    var_label   = VARIABLE_LABELS.get(col, col)
 
-    titles = [VARIABLE_LABELS.get(c, c) for c in columns]
-    while len(titles) < 4:
-        titles.append("")
+    fig = go.Figure()
 
-    fig = make_subplots(
-        rows=2, cols=2,
-        subplot_titles=titles,
-        vertical_spacing=0.12,
-        horizontal_spacing=0.08,
-    )
+    fig.add_trace(go.Scatter(
+        x=dates_list,
+        y=actuals[:, col_idx].tolist(),
+        name="Actual",
+        line=dict(color="black", width=2),
+        hovertemplate="<b>Actual</b>: %{y:.3f}<extra></extra>",
+    ))
 
-    positions = [(1, 1), (1, 2), (2, 1), (2, 2)]
-    dates_list = list(dates)
-
-    for idx, col in enumerate(columns):
-        row, c = positions[idx]
-        first = idx == 0
-
+    for mn in model_names:
         fig.add_trace(go.Scatter(
             x=dates_list,
-            y=actuals[:, idx].tolist(),
-            name="Actual",
-            line=dict(color="black", width=2),
-            legendgroup="Actual",
-            showlegend=first,
-            hovertemplate="<b>Actual</b>: %{y:.3f}<extra></extra>",
-        ), row=row, col=c)
-
-        for mn in model_names:
-            fig.add_trace(go.Scatter(
-                x=dates_list,
-                y=predictions[mn][:, idx].tolist(),
-                name=mn,
-                line=dict(color=MODEL_COLORS.get(mn, "gray"), width=1.4, dash="dash"),
-                legendgroup=mn,
-                showlegend=first,
-                hovertemplate=f"<b>{mn}</b>: %{{y:.3f}}<extra></extra>",
-            ), row=row, col=c)
+            y=predictions[mn][:, col_idx].tolist(),
+            name=mn,
+            line=dict(color=MODEL_COLORS.get(mn, "gray"), width=1.4, dash="dash"),
+            hovertemplate=f"<b>{mn}</b>: %{{y:.3f}}<extra></extra>",
+        ))
 
     fig.update_layout(
-        title_text=f"Predictions — {station_name}",
-        title_font_size=15,
-        height=650,
+        height=380,
         hovermode="x unified",
-        legend=dict(orientation="h", yanchor="bottom", y=1.04, xanchor="right", x=1),
-        margin=dict(t=90, b=40, l=50, r=30),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        margin=dict(t=40, b=40, l=55, r=20),
         template="plotly_white",
+        yaxis_title=var_label,
     )
     fig.update_xaxes(showgrid=True, gridcolor="#eeeeee")
     fig.update_yaxes(showgrid=True, gridcolor="#eeeeee")
@@ -679,20 +661,35 @@ if st.session_state.results:
 
     # ── Tab 1: Prediction plots ────────────────────────────────────────────────
     with tab_pred:
-        st.subheader("Actual vs Predicted")
+        st.markdown(
+            "<h3 style='text-align:center; letter-spacing:2px;'>PREDICTIONS</h3>",
+            unsafe_allow_html=True,
+        )
+        st.write("")
+
         station_list = list(results.keys())
 
         if len(station_list) == 2:
             left_col, right_col = st.columns(2)
             col_map = {station_list[0]: left_col, station_list[1]: right_col}
         else:
-            col_map = {station_list[0]: st}   # full width
+            col_map = {station_list[0]: st}
 
         for station_name, res in results.items():
             container = col_map[station_name]
-            fig = _make_prediction_figure(station_name, res)
-            container.plotly_chart(fig, use_container_width=True,
-                                   config={"modeBarButtonsToRemove": ["toImage"], "displaylogo": False})
+            container.markdown(
+                f"<p style='font-weight:700; letter-spacing:2px; margin-bottom:8px;'>"
+                f"{station_name.upper()}</p>",
+                unsafe_allow_html=True,
+            )
+            for col in res["columns"]:
+                var_label = VARIABLE_LABELS.get(col, col).upper()
+                with container.expander(var_label, expanded=False):
+                    fig = _make_variable_figure(station_name, res, col)
+                    st.plotly_chart(
+                        fig, use_container_width=True,
+                        config={"modeBarButtonsToRemove": ["toImage"], "displaylogo": False},
+                    )
 
     # ── Tab 2: Metrics tables ──────────────────────────────────────────────────
     with tab_metrics:
