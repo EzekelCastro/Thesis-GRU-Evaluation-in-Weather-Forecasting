@@ -155,6 +155,15 @@ def preprocess_station(
 
     df_clean = handle_missing_values(df[columns])
     df_clean = remove_outliers_iqr(df_clean, columns)
+
+    # Drop columns that are still entirely NaN after imputation (station has no data).
+    # MinMaxScaler cannot fit on all-NaN — this prevents a crash at scale time.
+    valid_cols = [c for c in columns if df_clean[c].notna().any()]
+    dropped = set(columns) - set(valid_cols)
+    if dropped:
+        print(f"    Warning: dropping all-NaN columns {sorted(dropped)}")
+    columns = valid_cols
+
     df_scaled, scalers = scale_data(df_clean, columns)
 
     train_df, test_df = train_test_split_time(df_scaled, test_ratio)
